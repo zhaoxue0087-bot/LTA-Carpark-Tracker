@@ -196,7 +196,7 @@ export async function fetchLiveLTAData(accountKey?: string): Promise<{
       headers['x-account-key'] = accountKey.trim();
     }
 
-    const response = await fetch('/api/carparks/live', {
+    const response = await fetch('/api/carparkavailability', {
       method: 'GET',
       headers,
     });
@@ -211,12 +211,12 @@ export async function fetchLiveLTAData(accountKey?: string): Promise<{
       };
     }
 
-    if (data.source === 'missing_key_fallback') {
+    if (data.source === 'missing_key_notice' || data.source === 'missing_key_fallback') {
       return {
         success: false,
         carparks: [],
         message: data.message || 'No LTA_ACCOUNT_KEY configured yet.',
-        source: 'missing_key_fallback',
+        source: 'missing_key_notice',
       };
     }
 
