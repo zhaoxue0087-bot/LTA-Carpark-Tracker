@@ -14,7 +14,9 @@ import {
   exportCarparksToCsv, 
   getBackendConfig, 
   saveBackendConfig, 
-  BackendConnectionConfig 
+  BackendConnectionConfig,
+  fetchLiveLTAData,
+  mergeLtaWithCuratedCarparks
 } from './services/carparkService';
 
 import { Navbar } from './components/Navbar';
@@ -66,6 +68,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'map' | 'list' | 'favorites' | 'api-guide'>('map');
   const [isBackendModalOpen, setIsBackendModalOpen] = useState<boolean>(false);
   const [backendConfig, setBackendConfig] = useState<BackendConnectionConfig>(getBackendConfig());
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
+  const [liveCount, setLiveCount] = useState<number>(0);
 
   // User Location
   const [userLocation, setUserLocation] = useState<UserCoordinates>(PRESET_LOCATIONS[0]);
@@ -108,27 +112,46 @@ export default function App() {
     setSavedCarparkIds([...updated]);
   };
 
-  // Manual & Auto Refresh Simulation
-  const handleRefresh = useCallback(() => {
+  // Live Sync & Simulation Handler
+  const handleSyncData = useCallback(async (forcedKey?: string) => {
     setIsRefreshing(true);
-    setTimeout(() => {
-      setCarparks((prev) => simulateLotUpdates(prev));
-      const now = new Date().toISOString();
-      setLastUpdated(now);
-      setIsRefreshing(false);
-    }, 400);
-  }, []);
+    const keyToUse = forcedKey !== undefined ? forcedKey : backendConfig.apiKey;
+
+    try {
+      const liveResult = await fetchLiveLTAData(keyToUse);
+      if (liveResult.success && liveResult.carparks.length > 0) {
+        setCarparks(mergeLtaWithCuratedCarparks(INITIAL_CARPARKS, liveResult.carparks));
+        setIsLiveConnected(true);
+        setLiveCount(liveResult.carparks.length);
+        setLastUpdated(new Date().toISOString());
+        setIsRefreshing(false);
+        return;
+      }
+    } catch (e) {
+      console.warn('LTA DataMall fetch error, falling back to local engine:', e);
+    }
+
+    // Fallback to simulation if no LTA key or offline
+    setIsLiveConnected(false);
+    setCarparks((prev) => simulateLotUpdates(prev));
+    setLastUpdated(new Date().toISOString());
+    setIsRefreshing(false);
+  }, [backendConfig.apiKey]);
+
+  // Initial fetch on mount
+  useEffect(() => {
+    handleSyncData();
+  }, [handleSyncData]);
 
   // Periodic Auto-Refresh based on config
   useEffect(() => {
     if (backendConfig.autoRefreshIntervalSecs <= 0) return;
     const interval = setInterval(() => {
-      setCarparks((prev) => simulateLotUpdates(prev));
-      setLastUpdated(new Date().toISOString());
+      handleSyncData();
     }, backendConfig.autoRefreshIntervalSecs * 1000);
 
     return () => clearInterval(interval);
-  }, [backendConfig.autoRefreshIntervalSecs]);
+  }, [backendConfig.autoRefreshIntervalSecs, handleSyncData]);
 
   // Geolocation Handler
   const handleUseCurrentGps = () => {
@@ -269,7 +292,7 @@ export default function App() {
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onRefresh={handleRefresh}
+        onRefresh={() => handleSyncData()}
         isRefreshing={isRefreshing}
         lastUpdated={lastUpdated}
         isDarkMode={isDarkMode}
@@ -277,6 +300,8 @@ export default function App() {
         savedCount={savedCarparkIds.length}
         onExportCsv={handleExportCsv}
         onOpenBackendModal={() => setIsBackendModalOpen(true)}
+        isLiveConnected={isLiveConnected}
+        liveCount={liveCount}
       />
 
       {/* 2. Quick Location & Preset Switcher */}
@@ -543,6 +568,9 @@ export default function App() {
         onClose={() => setIsBackendModalOpen(false)}
         config={backendConfig}
         onSaveConfig={handleSaveBackendConfig}
+        onTriggerLiveSync={() => handleSyncData()}
+        isLiveConnected={isLiveConnected}
+        liveCarparkCount={liveCount}
       />
     </div>
   );

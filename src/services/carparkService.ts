@@ -146,12 +146,12 @@ export function simulateLotUpdates(carparks: Carpark[]): Carpark[] {
 }
 
 /**
- * Connector configuration for future backend integration
+ * Connector configuration for LTA DataMall & public feeds
  */
 export interface BackendConnectionConfig {
-  backendUrl: string; // e.g. "https://api.data.gov.sg/v1/transport/carpark-availability" or "/api/carpark-availability"
+  backendUrl: string;
   apiKey?: string;
-  sourceType: 'SIMULATION' | 'DATAGOV' | 'LTA_DATAMALL' | 'CUSTOM_API';
+  sourceType: 'LTA_DATAMALL' | 'SIMULATION' | 'DATAGOV' | 'CUSTOM_API';
   autoRefreshIntervalSecs: number; // 0 = disabled, 15, 30, 60
 }
 
@@ -165,9 +165,9 @@ export function getBackendConfig(): BackendConnectionConfig {
     console.error(err);
   }
   return {
-    backendUrl: 'https://api.data.gov.sg/v1/transport/carpark-availability',
+    backendUrl: '/api/carparks/live',
     apiKey: '',
-    sourceType: 'SIMULATION',
+    sourceType: 'LTA_DATAMALL',
     autoRefreshIntervalSecs: 30,
   };
 }
@@ -178,6 +178,162 @@ export function saveBackendConfig(config: BackendConnectionConfig): void {
   } catch (err) {
     console.error(err);
   }
+}
+
+/**
+ * Fetch live carparks from server route connected to LTA DataMall
+ */
+export async function fetchLiveLTAData(accountKey?: string): Promise<{
+  success: boolean;
+  carparks: Carpark[];
+  message: string;
+  source: string;
+  cached?: boolean;
+}> {
+  try {
+    const headers: Record<string, string> = {};
+    if (accountKey) {
+      headers['x-account-key'] = accountKey.trim();
+    }
+
+    const response = await fetch('/api/carparks/live', {
+      method: 'GET',
+      headers,
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      return {
+        success: false,
+        carparks: [],
+        message: data.message || `Server responded with ${response.status}`,
+        source: data.source || 'error',
+      };
+    }
+
+    if (data.source === 'missing_key_fallback') {
+      return {
+        success: false,
+        carparks: [],
+        message: data.message || 'No LTA_ACCOUNT_KEY configured yet.',
+        source: 'missing_key_fallback',
+      };
+    }
+
+    return {
+      success: true,
+      carparks: data.carparks || [],
+      message: `Fetched ${data.count || 0} carparks from LTA DataMall`,
+      source: data.source || 'lta_datamall',
+      cached: data.cached,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      carparks: [],
+      message: error.message || 'Network request failed',
+      source: 'network_error',
+    };
+  }
+}
+
+/**
+ * Validate an LTA AccountKey
+ */
+export async function validateLtaAccountKey(accountKey: string): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  try {
+    const response = await fetch('/api/carparks/test-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountKey }),
+    });
+
+    const data = await response.json();
+    return {
+      success: data.success || response.ok,
+      message: data.message || (response.ok ? 'AccountKey is valid' : 'Failed to validate key'),
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error.message || 'Failed to connect to verification server',
+    };
+  }
+}
+
+/**
+ * Merge live LTA DataMall records with base rich curated carparks
+ */
+export function mergeLtaWithCuratedCarparks(
+  curated: Carpark[],
+  liveLtaList: Carpark[]
+): Carpark[] {
+  if (!liveLtaList || liveLtaList.length === 0) return curated;
+
+  const ltaMap = new Map<string, Carpark>();
+  for (const item of liveLtaList) {
+    ltaMap.set(item.carparkNumber.toUpperCase(), item);
+    // Also index by sanitized name
+    ltaMap.set(item.name.toLowerCase().trim(), item);
+  }
+
+  // 1. Update curated carparks with real live lot counts if matching
+  const updatedCurated = curated.map((base) => {
+    const live = ltaMap.get(base.carparkNumber.toUpperCase()) || ltaMap.get(base.name.toLowerCase().trim());
+    if (live) {
+      // Remove from map so we know it's merged
+      ltaMap.delete(base.carparkNumber.toUpperCase());
+      ltaMap.delete(base.name.toLowerCase().trim());
+
+      return {
+        ...base,
+        lastUpdated: live.lastUpdated || new Date().toISOString(),
+        lots: {
+          C: live.lots.C?.lotsAvailable !== undefined
+            ? {
+                ...base.lots.C,
+                lotsAvailable: live.lots.C.lotsAvailable,
+                totalLots: Math.max(base.lots.C.totalLots, live.lots.C.lotsAvailable),
+                updateDatetime: live.lots.C.updateDatetime,
+              }
+            : base.lots.C,
+          M: live.lots.M?.lotsAvailable !== undefined
+            ? {
+                ...base.lots.M,
+                lotsAvailable: live.lots.M.lotsAvailable,
+                totalLots: Math.max(base.lots.M.totalLots, live.lots.M.lotsAvailable),
+                updateDatetime: live.lots.M.updateDatetime,
+              }
+            : base.lots.M,
+          H: live.lots.H?.lotsAvailable !== undefined
+            ? {
+                ...base.lots.H,
+                lotsAvailable: live.lots.H.lotsAvailable,
+                totalLots: Math.max(base.lots.H.totalLots, live.lots.H.lotsAvailable),
+                updateDatetime: live.lots.H.updateDatetime,
+              }
+            : base.lots.H,
+        },
+      };
+    }
+    return base;
+  });
+
+  // 2. Append all newly discovered carparks from LTA DataMall
+  const newLtaItems: Carpark[] = [];
+  const addedIds = new Set(updatedCurated.map((c) => c.carparkNumber.toUpperCase()));
+
+  for (const item of liveLtaList) {
+    if (!addedIds.has(item.carparkNumber.toUpperCase())) {
+      addedIds.add(item.carparkNumber.toUpperCase());
+      newLtaItems.push(item);
+    }
+  }
+
+  return [...updatedCurated, ...newLtaItems];
 }
 
 /**

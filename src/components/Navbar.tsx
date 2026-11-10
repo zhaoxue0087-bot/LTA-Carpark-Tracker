@@ -21,6 +21,8 @@ interface NavbarProps {
   savedCount: number;
   onExportCsv: () => void;
   onOpenBackendModal: () => void;
+  isLiveConnected: boolean;
+  liveCount: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -34,6 +36,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   savedCount,
   onExportCsv,
   onOpenBackendModal,
+  isLiveConnected,
+  liveCount,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors">
@@ -50,10 +54,19 @@ export const Navbar: React.FC<NavbarProps> = ({
               onClick={(e) => { e.preventDefault(); setActiveTab('map'); }}
             >
               SG ParkLive
-              <span className="text-xs font-mono font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded">
-                SG REAL-TIME
-              </span>
             </a>
+            <button
+              onClick={onOpenBackendModal}
+              title="Click to view LTA DataMall live connection settings"
+              className={`text-xs font-mono font-semibold px-2 py-0.5 rounded transition-colors flex items-center gap-1.5 ${
+                isLiveConnected
+                  ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-100/80 dark:bg-emerald-950/70 border border-emerald-300 dark:border-emerald-800'
+                  : 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-800'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isLiveConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              <span>{isLiveConnected ? `LTA LIVE (${liveCount})` : 'LTA DATAMALL'}</span>
+            </button>
           </div>
 
           {/* Zone 2: 4-5 concise single-line text navigation links */}
